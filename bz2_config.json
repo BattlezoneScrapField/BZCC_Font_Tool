@@ -1,0 +1,62 @@
+{
+  "folder": "",
+  "backup_folder": "",
+  "preview_text": "BZCC Hardcore Edition",
+  "categories": {
+    "TINY": {
+      "font_path": "C:\\Users\\vac34\\AppData\\Local\\Microsoft\\Windows\\Fonts\\15126.otf",
+      "base_size": 6,
+      "aa": false,
+      "sharpen": true,
+      "stroke": 0.0,
+      "offset": 4.0,
+      "spacing": 0.0,
+      "contrast": 2.0,
+      "brightness": 1.0
+    },
+    "SYSTEM": {
+      "font_path": "C:\\Users\\vac34\\AppData\\Local\\Microsoft\\Windows\\Fonts\\15126.otf",
+      "base_size": 8,
+      "aa": false,
+      "sharpen": true,
+      "stroke": 0.0,
+      "offset": 4.0,
+      "spacing": 0.0,
+      "contrast": 2.0,
+      "brightness": 1.0
+    },
+    "SMALL": {
+      "font_path": "C:\\Users\\vac34\\AppData\\Local\\Microsoft\\Windows\\Fonts\\15126.otf",
+      "base_size": 8,
+      "aa": false,
+      "sharpen": true,
+      "stroke": 0.0,
+      "offset": 4.0,
+      "spacing": 0.0,
+      "contrast": 2.0,
+      "brightness": 1.0
+    },
+    "MEDIUM": {
+      "font_path": "C:\\Users\\vac34\\AppData\\Local\\Microsoft\\Windows\\Fonts\\15126.otf",
+      "base_size": 10,
+      "aa": false,
+      "sharpen": true,
+      "stroke": 0.0,
+      "offset": 4.0,
+      "spacing": 0.0,
+      "contrast": 2.0,
+      "brightness": 1.0
+    },
+    "LARGE": {
+      "font_path": "C:\\Users\\vac34\\AppData\\Local\\Microsoft\\Windows\\Fonts\\15126.otf",
+      "base_size": 12,
+      "aa": false,
+      "sharpen": true,
+      "stroke": 0.0,
+      "offset": 4.0,
+      "spacing": 0.0,
+      "contrast": 2.0,
+      "brightness": 1.0
+    }
+  }
+}
