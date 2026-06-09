@@ -419,7 +419,7 @@ class ProcessWorker(QThread):
     log = pyqtSignal(str)
     finished = pyqtSignal(int, int)
     
-    def __init__(self, target_folder, backup_folder, font_path, scale_idx, profiles, is_bmf, target_size_override, source_size_override):
+    def __init__(self, target_folder, backup_folder, font_path, scale_idx, profiles, is_bmf, target_size_override, source_size_override, export_ttf=False):
         super().__init__()
         self.target_folder = target_folder
         self.backup_folder = backup_folder
@@ -429,6 +429,7 @@ class ProcessWorker(QThread):
         self.is_bmf = is_bmf
         self.target_size_override = target_size_override
         self.source_size_override = source_size_override
+        self.export_ttf = export_ttf
         self.is_running = True
         
     def run(self):
@@ -459,6 +460,146 @@ class ProcessWorker(QThread):
                 return
         else:
             self.log.emit("Processing in-place.")
+            
+        if self.export_ttf and self.is_bmf:
+            try:
+                self.log.emit("Generating TTF...")
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+                out_ttf = os.path.join(app_dir, f"{font_safe}_Exported.ttf")
+                from fontTools.subset import main as subset_main
+                from fontTools.ttLib import TTFont, newTable
+                from fontTools.ttLib.tables.sbixGlyph import Glyph as sbixGlyph
+                from fontTools.ttLib.tables.sbixStrike import Strike as sbixStrike
+                import io
+                import tempfile
+
+                temp_ttf = os.path.join(tempfile.gettempdir(), "bz2_temp_skel.ttf")
+                try:
+                    arial_path = os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts', 'arial.ttf')
+                    if not os.path.exists(arial_path):
+                        arial_path = os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts', 'tahoma.ttf')
+                    
+                    # Generate a bulletproof Windows-compliant TTF wrapper
+                    subset_main([arial_path, '--unicodes=0020-00FF', f'--output-file={temp_ttf}'])
+                except Exception as e:
+                    self.log.emit(f"Failed to create TTF skeleton: {e}")
+                    self.finished.emit(0, 1)
+                    return
+
+                fb_font = TTFont(temp_ttf)
+                upm = fb_font['head'].unitsPerEm
+                
+                # Wipe and replace the name table records with our font name
+                family_bytes = family.encode('utf-16-be')
+                family_ascii = family.encode('ascii', 'replace')
+                for rec in fb_font['name'].names:
+                    if rec.nameID in (1, 3, 4, 6):
+                        if rec.platformID == 3:
+                            rec.string = family_bytes
+                        else:
+                            rec.string = family_ascii
+
+                # Vectorize the 'System' profile pixels for maximum standard compatibility
+                conf = self.profiles.get('System', {})
+                base_size = 16
+                fh, fa, fd, bz_chars = render_font_file(face, base_size, conf)
+                
+                scale = upm / float(base_size)
+                
+                from fontTools.pens.ttGlyphPen import TTGlyphPen
+                cmap = fb_font.getBestCmap()
+                glyf = fb_font['glyf']
+                hmtx = fb_font['hmtx']
+                
+                traced_glyphs = set()
+                
+                for code, char_data in bz_chars.items():
+                    if code < 32 or code > 255: continue
+                    glyph_name = cmap.get(code)
+                    if not glyph_name: continue
+                    
+                    gw = char_data['charWidth']
+                    gh = char_data['charHeight']
+                    raw = char_data['charData']
+                    
+                    pen = TTGlyphPen(glyf)
+                    
+                    if gw > 0 and gh > 0 and raw:
+                        true_x = char_data.get('leftOffset', 0) + char_data.get('rectX0', 0)
+                        for py in range(gh):
+                            # TrueType Y goes up. BMF rectY0 is offset from the top of the line (fa).
+                            # Add +/- 1 overlap to fuse adjacent squares and prevent Windows rasterization artifacts
+                            row_y_top = int((fa - char_data['rectY0'] - py) * scale) + 1
+                            row_y_bottom = int((fa - char_data['rectY0'] - py - 1) * scale) - 1
+                            
+                            px = 0
+                            while px < gw:
+                                idx = py * gw + px
+                                # Threshold at 127 to ignore anti-aliased glow/shadow and only trace solid pixels
+                                if raw[idx] > 127:
+                                    start_x = px
+                                    while px < gw and raw[py * gw + px] > 127:
+                                        px += 1
+                                        
+                                    x0 = int((true_x + start_x) * scale) - 1
+                                    x1 = int((true_x + px) * scale) + 1
+                                    
+                                    pen.moveTo((x0, row_y_bottom))
+                                    pen.lineTo((x0, row_y_top))
+                                    pen.lineTo((x1, row_y_top))
+                                    pen.lineTo((x1, row_y_bottom))
+                                    pen.closePath()
+                                else:
+                                    px += 1
+                                    
+                    glyf[glyph_name] = pen.glyph()
+                    traced_glyphs.add(glyph_name)
+                    
+                    advance = int(char_data.get('fullWidth', gw + 2) * scale)
+                    lsb = int(char_data.get('rectX0', 0) * scale)
+                    hmtx.metrics[glyph_name] = (advance, lsb)
+
+                # Clear remaining Arial subset glyphs to prevent mismatched vector rendering
+                empty_pen = TTGlyphPen(None)
+                empty_glyph = empty_pen.glyph()
+                for gn in glyf.keys():
+                    if gn not in traced_glyphs and gn not in ['.notdef', 'space', 'nonmarkingreturn']:
+                        glyf[gn] = empty_glyph
+                        
+                # Ensure global font metrics perfectly match our newly scaled pixel grid
+                max_asc = int(fa * scale)
+                max_desc = int(-abs(fd) * scale) if fd != 0 else int(-abs(fh - fa) * scale)
+                if 'hhea' in fb_font:
+                    fb_font['hhea'].ascent = max_asc
+                    fb_font['hhea'].descent = max_desc
+                    fb_font['hhea'].lineGap = 0
+                if 'OS/2' in fb_font:
+                    fb_font['OS/2'].sTypoAscender = max_asc
+                    fb_font['OS/2'].sTypoDescender = max_desc
+                    fb_font['OS/2'].sTypoLineGap = 0
+                    fb_font['OS/2'].usWinAscent = max_asc
+                    fb_font['OS/2'].usWinDescent = abs(max_desc)
+
+                # Strip Arial's hinting tables so Windows TrueType Hinter doesn't distort our pixel squares
+                for table in ['fpgm', 'prep', 'cvt ', 'hdmx', 'VDMX', 'LTSH', 'gasp']:
+                    if table in fb_font:
+                        del fb_font[table]
+
+                if 'sbix' in fb_font:
+                    del fb_font['sbix']
+
+                fb_font.save(out_ttf)
+                
+                try: os.remove(temp_ttf)
+                except: pass
+
+                self.progress.emit(100)
+                self.log.emit(f"Successfully generated: {os.path.basename(out_ttf)}")
+                self.finished.emit(1, 0)
+            except Exception as e:
+                self.log.emit(f"TTF Export Error: {e}")
+                self.finished.emit(0, 1)
+            return
             
         if self.is_bmf and self.target_size_override is not None:
             # Single Target Generation Mode
@@ -756,6 +897,10 @@ class FontToolApp(QMainWindow):
         self.input_target_size.setMaximumWidth(40)
         self.input_target_size.textChanged.connect(self.schedule_preview_update)
         bmf_layout.addWidget(self.input_target_size)
+        self.btn_export_ttf = QPushButton("Export TTF")
+        self.btn_export_ttf.setStyleSheet("QPushButton { background-color: #005a30; color: #fff; font-weight: bold; border-radius: 3px; } QPushButton:hover { background-color: #008b49; }")
+        self.btn_export_ttf.clicked.connect(self.start_ttf_export)
+        bmf_layout.addWidget(self.btn_export_ttf)
         self.tabs.addTab(self.tab_bmf, " BMF Raster Studio ")
         
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -1394,8 +1539,37 @@ class FontToolApp(QMainWindow):
         self.worker.finished.connect(self.on_processing_finished)
         self.worker.start()
 
+    def start_ttf_export(self):
+        folder = self.input_folder.text()
+        if not folder or not os.path.exists(folder) or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Invalid Target", "Please select a valid directory to save the TTF.")
+            return
+            
+        display_name = self.combo_fonts_bmf.currentText()
+        font_path = self.font_files_bmf.get(display_name)
+        if not font_path or not os.path.exists(font_path):
+            QMessageBox.warning(self, "Missing Font", "Select a valid BMF font first.")
+            return
+            
+        self.btn_process.setEnabled(False)
+        self.btn_export_ttf.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.lbl_status.setText("Generating TTF...")
+        
+        safe_profiles = copy.deepcopy(self.active_profiles)
+        source_sz_ovr = None
+        if self.input_source_size.text().isdigit():
+            source_sz_ovr = int(self.input_source_size.text())
+            
+        self.worker = ProcessWorker(folder, self.input_backup.text(), font_path, 0, safe_profiles, True, None, source_sz_ovr, export_ttf=True)
+        self.worker.progress.connect(self.progress_bar.setValue)
+        self.worker.log.connect(self.lbl_status.setText)
+        self.worker.finished.connect(self.on_processing_finished)
+        self.worker.start()
+
     def on_processing_finished(self, conv, errs):
         self.btn_process.setEnabled(True)
+        if hasattr(self, 'btn_export_ttf'): self.btn_export_ttf.setEnabled(True)
         self.progress_bar.setValue(100)
         if errs == 0:
             self.lbl_status.setText(f"Complete. {conv} files processed.")
