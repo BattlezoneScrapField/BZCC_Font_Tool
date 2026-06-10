@@ -4,4 +4,6 @@ This is font program for battlezone combat commander. You can replace fonts in B
 
 Link to .exe: https://drive.google.com/drive/folders/1kGQA0feCa6_oDkNcCfoVoHIaU1hgceFG?usp=sharing
 
+Use the addon/interface custom folder with .bmf files. You can use the system installed .ttf/otf fonts to import them in BZCC.
+
 <img width="1920" height="1080" alt="2026-06-09_211422" src="https://github.com/user-attachments/assets/a1af9418-cfad-4067-a8ca-ec8a34272a23" />
